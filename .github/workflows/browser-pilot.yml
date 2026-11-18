@@ -1,0 +1,46 @@
+name: EfficientNet-B0 browser pilot
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  export-and-package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify and unpack selected source
+        run: |
+          echo "f2f73f08abe1c3b9944c0c6aed9833614d9f4c209f4e165108ff7048d64a94ff  lua-khoe-browser-source.zip" | sha256sum -c -
+          unzip -q lua-khoe-browser-source.zip
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install CPU export dependencies
+        run: |
+          python -m pip install torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install onnx==1.17.0 onnxruntime==1.20.1 numpy==2.2.5
+      - name: Export original EfficientNet-B0 and verify tensor parity
+        run: python scripts/export_browser_model.py --output browser-pilot/model
+      - name: Package browser runtime
+        working-directory: browser-pilot
+        run: |
+          npm install --ignore-scripts --no-audit --no-fund
+          mkdir -p vendor
+          cp node_modules/onnxruntime-web/dist/ort.wasm.min.mjs vendor/
+          cp node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.mjs vendor/
+          cp node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.wasm vendor/
+          node --check app.js
+      - uses: actions/upload-artifact@v4
+        with:
+          name: efficientnet-b0-browser-pilot
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            browser-pilot/index.html
+            browser-pilot/app.js
+            browser-pilot/vendor/
+            browser-pilot/model/
