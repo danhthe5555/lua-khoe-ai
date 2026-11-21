@@ -48,7 +48,7 @@ jobs:
           query='SELECT id, user_id, season_id, image_key FROM diagnoses WHERE image_key IS NOT NULL ORDER BY id;'
           "${stack[@]}" exec -T db psql -XAt -v ON_ERROR_STOP=1 -U lua_khoe -d lua_khoe -c "$query" > .local/ci/before-restart.tsv
           test -s .local/ci/before-restart.tsv
-          "${stack[@]}" exec -T api sh -ec 'cd /app/storage; sha256sum -- *.jpg' > .local/ci/images.sha256
+          "${stack[@]}" exec -T api sh -ec 'cd /app/storage; find . -maxdepth 1 -type f -exec sha256sum {} + | sort' > .local/ci/images.sha256
           "${stack[@]}" restart db api
           "${stack[@]}" up -d --wait --wait-timeout 240 web mailpit
           "${stack[@]}" exec -T web wget -qO- http://127.0.0.1/health/ready
