@@ -14,7 +14,6 @@ jobs:
       - name: Load source bundle
         run: |
           if test -f lua-khoe-ai-v16-source.zip; then
-            sha256sum lua-khoe-ai-v16-source.zip
             unzip -q lua-khoe-ai-v16-source.zip
           fi
       - name: Build and start isolated stack
@@ -25,7 +24,7 @@ jobs:
             printf 'TEST_ADMIN_EMAIL=ci@example.com\n'
             printf 'TEST_ADMIN_PASSWORD=%s\n' "$(openssl rand -hex 24)"
             printf 'TEST_IMAGE_DIRECTORY=%s/.local/ci/fixtures\n' "$PWD"
-            printf 'TEST_IMAGE_NAME=unused.png\n'
+            printf 'TEST_IMAGE_NAME=synthetic-smoke.png\n'
             printf 'ACCEPTANCE_OUTPUT=%s/.local/ci/output\n' "$PWD"
           } > .local/ci/test.env
           docker compose --env-file .local/ci/test.env -f docker-compose.test.yml up -d --build --wait --wait-timeout 240 web mailpit
@@ -34,11 +33,34 @@ jobs:
       - name: Verify readiness through frontend proxy
         run: |
           docker compose --env-file .local/ci/test.env -f docker-compose.test.yml exec -T web wget -qO- http://127.0.0.1/health/ready
-      - name: Run browser journeys on isolated PostgreSQL
+      - name: Run browser journeys on isolated PostgreSQL with a synthetic image
         run: |
-          docker compose --env-file .local/ci/test.env -f docker-compose.test.yml --profile test run --build --rm --no-deps -T test-admin
-          docker compose --env-file .local/ci/test.env -f docker-compose.test.yml --profile test run --build --rm --no-deps -T -e TEST_REQUIRE_COMPLETE=false -e TEST_IMAGE= e2e npx playwright test tests/journey.spec.ts tests/admin-journey.spec.ts --output=/app/acceptance-output/test-results
-          python -c 'import json; r=json.load(open(".local/ci/output/playwright-results.json"))["stats"]; assert r["expected"] == 3 and r["skipped"] == r["flaky"] == r["unexpected"] == 0, r'
+          stack=(docker compose --env-file .local/ci/test.env -f docker-compose.test.yml --profile test)
+          "${stack[@]}" exec -T api python -c 'import sys; from PIL import Image; Image.effect_noise((320, 320), 28).convert("RGB").save(sys.stdout.buffer, format="PNG")' > .local/ci/fixtures/synthetic-smoke.png
+          "${stack[@]}" run --build --rm --no-deps -T test-admin
+          "${stack[@]}" run --build --rm --no-deps -T -e TEST_REQUIRE_COMPLETE=false e2e npx playwright test --output=/app/acceptance-output/test-results
+          python -c 'import json; r=json.load(open(".local/ci/output/playwright-results.json", encoding="utf-8"))["stats"]; assert r["expected"] == 7 and r["skipped"] == r["flaky"] == r["unexpected"] == 0, r'
+      - name: Verify restart and restore database and private image fixtures
+        run: |
+          stack=(docker compose --env-file .local/ci/test.env -f docker-compose.test.yml)
+          query='SELECT id, user_id, season_id, image_key FROM diagnoses WHERE image_key IS NOT NULL ORDER BY id;'
+          "${stack[@]}" exec -T db psql -XAt -v ON_ERROR_STOP=1 -U lua_khoe -d lua_khoe -c "$query" > .local/ci/before-restart.tsv
+          test -s .local/ci/before-restart.tsv
+          "${stack[@]}" exec -T api sh -ec 'cd /app/storage; sha256sum -- *.jpg' > .local/ci/images.sha256
+          "${stack[@]}" restart db api
+          "${stack[@]}" up -d --wait --wait-timeout 240 web mailpit
+          "${stack[@]}" exec -T web wget -qO- http://127.0.0.1/health/ready
+          "${stack[@]}" exec -T db psql -XAt -v ON_ERROR_STOP=1 -U lua_khoe -d lua_khoe -c "$query" > .local/ci/after-restart.tsv
+          cmp .local/ci/before-restart.tsv .local/ci/after-restart.tsv
+          "${stack[@]}" exec -T db pg_dump -U lua_khoe -Fc lua_khoe > .local/ci/backup.dump
+          "${stack[@]}" exec -T api tar -C /app/storage -cf - . > .local/ci/images.tar
+          "${stack[@]}" exec -T db createdb -U lua_khoe lua_khoe_restore
+          "${stack[@]}" exec -T db pg_restore -U lua_khoe --exit-on-error -d lua_khoe_restore < .local/ci/backup.dump
+          "${stack[@]}" exec -T db psql -XAt -v ON_ERROR_STOP=1 -U lua_khoe -d lua_khoe_restore -c "$query" > .local/ci/restored.tsv
+          cmp .local/ci/before-restart.tsv .local/ci/restored.tsv
+          mkdir .local/ci/restored-images
+          tar -xf .local/ci/images.tar -C .local/ci/restored-images
+          (cd .local/ci/restored-images && sha256sum -c ../images.sha256)
       - name: Show container state on failure
         if: failure()
         run: |
