@@ -14,6 +14,7 @@ jobs:
       - name: Load source bundle
         run: |
           if test -f lua-khoe-ai-v16-source.zip; then
+            sha256sum lua-khoe-ai-v16-source.zip
             unzip -q lua-khoe-ai-v16-source.zip
           fi
       - name: Build and start isolated stack
@@ -21,7 +22,7 @@ jobs:
           mkdir -p .local/ci/fixtures .local/ci/output
           {
             printf 'POSTGRES_PASSWORD=%s\n' "$(openssl rand -hex 24)"
-            printf 'TEST_ADMIN_EMAIL=ci@example.invalid\n'
+            printf 'TEST_ADMIN_EMAIL=ci@example.com\n'
             printf 'TEST_ADMIN_PASSWORD=%s\n' "$(openssl rand -hex 24)"
             printf 'TEST_IMAGE_DIRECTORY=%s/.local/ci/fixtures\n' "$PWD"
             printf 'TEST_IMAGE_NAME=unused.png\n'
@@ -33,6 +34,11 @@ jobs:
       - name: Verify readiness through frontend proxy
         run: |
           docker compose --env-file .local/ci/test.env -f docker-compose.test.yml exec -T web wget -qO- http://127.0.0.1/health/ready
+      - name: Run browser journeys on isolated PostgreSQL
+        run: |
+          docker compose --env-file .local/ci/test.env -f docker-compose.test.yml --profile test run --build --rm --no-deps -T test-admin
+          docker compose --env-file .local/ci/test.env -f docker-compose.test.yml --profile test run --build --rm --no-deps -T -e TEST_REQUIRE_COMPLETE=false -e TEST_IMAGE= e2e npx playwright test tests/journey.spec.ts tests/admin-journey.spec.ts --output=/app/acceptance-output/test-results
+          python -c 'import json; r=json.load(open(".local/ci/output/playwright-results.json"))["stats"]; assert r["expected"] == 3 and r["skipped"] == r["flaky"] == r["unexpected"] == 0, r'
       - name: Show container state on failure
         if: failure()
         run: |
