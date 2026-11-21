@@ -33,6 +33,8 @@ jobs:
       - name: Verify readiness through frontend proxy
         run: |
           docker compose --env-file .local/ci/test.env -f docker-compose.test.yml exec -T web wget -qO- http://127.0.0.1/health/ready
+      - name: Check real SMTP to Mailpit and Tesseract against isolated fixtures
+        run: docker compose --env-file .local/ci/test.env -f docker-compose.test.yml exec -T api python tests/check_integration_services.py
       - name: Run browser journeys on isolated PostgreSQL with a synthetic image
         run: |
           stack=(docker compose --env-file .local/ci/test.env -f docker-compose.test.yml --profile test)
